@@ -8,11 +8,13 @@ tiers (NeverBounce/ZeroBounce/Reoon) sur les seuls survivants.
 
 Usage:
     python3 prefilter_emails.py [--input emails_bruts.csv] [--email-column email]
-                                 [--workers 20]
+                                 [--workers 20] [--delimiter ,]
 
 Entree : un CSV avec au minimum une colonne `email` (nom de colonne
 configurable via --email-column). Toutes les autres colonnes du CSV
-d'origine sont conservees telles quelles dans les fichiers de sortie.
+d'origine sont conservees telles quelles dans les fichiers de sortie. Un
+export Excel francais (separateur `;`, BOM UTF-8) se lit avec
+`--delimiter ";"`.
 
 Trois couches de filtrage, dans l'ordre :
 1. Syntaxe (regex email valide, RFC-simplifie) -> rejet si invalide.
@@ -22,11 +24,13 @@ Trois couches de filtrage, dans l'ordre :
      une adresse perso reste parfois la seule adresse d'un auto-entrepreneur.
    - domaine jetable connu (mailinator.com, yopmail.com, ...) -> rejet.
 3. MX record (requete DNS uniquement, aucune connexion au serveur mail
-   lui-meme) -> rejet si le domaine n'a aucun MX ; si la resolution DNS
-   echoue par timeout/erreur reseau (pas de reponse ferme "pas de MX"),
-   l'email est marque incertain mais GARDE, pas rejete par prudence.
+   lui-meme) -> rejet si le domaine n'a aucun MX ou publie un "null MX"
+   (RFC 7505 : le domaine declare ne recevoir aucun courrier) ; si la
+   resolution DNS echoue par timeout/erreur reseau (pas de reponse ferme
+   "pas de MX"), l'email est marque incertain mais GARDE, pas rejete par
+   prudence.
 
-Sortie :
+Sortie (ecrite a cote du fichier d'entree, fichiers existants ecrases) :
 - emails_a_verifier.csv : lignes conservees + colonnes type_domaine/statut_mx.
 - emails_rejetes.csv : lignes rejetees + colonne raison_rejet.
 - Resume affiche en console.
@@ -45,6 +49,8 @@ from typing import Dict, Optional
 import dns.exception
 import dns.resolver
 from tqdm import tqdm
+
+VERSION = "1.1.0"
 
 # Regex email pragmatique (RFC 5322 simplifie) : suffisant pour rejeter les
 # fautes de frappe/format grossierement invalide, sans viser une conformite
@@ -76,6 +82,13 @@ def _domain_of(email: str) -> str:
     return email.rsplit("@", 1)[-1].strip().lower()
 
 
+def _is_null_mx(answers) -> bool:
+    """Vrai si tous les enregistrements sont un "null MX" (RFC 7505 :
+    preference 0 et cible "."), c'est-a-dire un domaine qui declare ne
+    recevoir aucun courrier."""
+    return all(str(rr.exchange).rstrip(".") == "" for rr in answers)
+
+
 def _check_mx(domain: str, timeout: float = 5.0) -> str:
     """Retourne 'ok', 'absent', ou 'incertain' -- ne fait AUCUNE connexion
     au serveur mail, uniquement une requete DNS de type MX (query publique
@@ -90,7 +103,10 @@ def _check_mx(domain: str, timeout: float = 5.0) -> str:
         resolver.timeout = timeout
         resolver.lifetime = timeout
         answers = resolver.resolve(domain, "MX")
-        result = "ok" if len(answers) > 0 else "absent"
+        if len(answers) == 0 or _is_null_mx(answers):
+            result = "absent"
+        else:
+            result = "ok"
     except dns.resolver.NXDOMAIN:
         result = "absent"
     except dns.resolver.NoAnswer:
@@ -118,13 +134,16 @@ def prefilter(
     input_path: Path,
     email_column: str = "email",
     workers: int = 20,
+    delimiter: str = ",",
 ) -> None:
     output_dir = input_path.parent
     kept_path = output_dir / "emails_a_verifier.csv"
     rejected_path = output_dir / "emails_rejetes.csv"
 
-    with input_path.open(newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
+    # utf-8-sig : lit aussi les CSV exportes par Excel (BOM en tete), sans
+    # quoi la premiere colonne s'appellerait "﻿email".
+    with input_path.open(newline="", encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f, delimiter=delimiter)
         if email_column not in (reader.fieldnames or []):
             print(f"Erreur : colonne '{email_column}' absente de {input_path}. "
                   f"Colonnes trouvees : {reader.fieldnames}")
@@ -170,8 +189,10 @@ def prefilter(
           f"({workers} threads en parallele)...")
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {executor.submit(_check_mx, d): d for d in domains_to_check}
-        for _ in tqdm(as_completed(futures), total=len(futures), desc="MX lookup"):
-            pass  # le resultat est deja cache dans _mx_cache par _check_mx
+        for future in tqdm(as_completed(futures), total=len(futures), desc="MX lookup"):
+            # Le resultat est mis en cache par _check_mx ; result() fait
+            # remonter une exception inattendue au lieu de l'avaler.
+            future.result()
 
     kept_rows = []
     rejected_rows = list(stage1_rejected)
@@ -195,12 +216,12 @@ def prefilter(
     ))
 
     with kept_path.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=kept_fieldnames, extrasaction="ignore")
+        writer = csv.DictWriter(f, fieldnames=kept_fieldnames, extrasaction="ignore", delimiter=delimiter)
         writer.writeheader()
         writer.writerows(kept_rows)
 
     with rejected_path.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=rejected_fieldnames, extrasaction="ignore")
+        writer = csv.DictWriter(f, fieldnames=rejected_fieldnames, extrasaction="ignore", delimiter=delimiter)
         writer.writeheader()
         writer.writerows(rejected_rows)
 
@@ -226,14 +247,19 @@ def main() -> None:
     parser.add_argument("--input", default="emails_bruts.csv", help="CSV d'entree (defaut: emails_bruts.csv)")
     parser.add_argument("--email-column", default="email", help="Nom de la colonne email (defaut: email)")
     parser.add_argument("--workers", type=int, default=20, help="Threads paralleles pour les requetes MX (defaut: 20)")
+    parser.add_argument("--delimiter", default=",", help="Separateur du CSV (defaut: ','; export Excel francais: ';')")
     args = parser.parse_args()
+
+    if len(args.delimiter) != 1:
+        print("Erreur : --delimiter doit etre un seul caractere.")
+        sys.exit(1)
 
     input_path = Path(args.input)
     if not input_path.exists():
         print(f"Erreur : fichier introuvable : {input_path}")
         sys.exit(1)
 
-    prefilter(input_path, email_column=args.email_column, workers=args.workers)
+    prefilter(input_path, email_column=args.email_column, workers=args.workers, delimiter=args.delimiter)
 
 
 if __name__ == "__main__":

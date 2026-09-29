@@ -1,0 +1,108 @@
+{
+  "skill_name": "email-prefilter",
+  "skill_version": "1.1.0",
+  "note": "Cas fictifs : entreprises et adresses sont inventées (domaines en .example). Les cas 'pipeline' se rejouent hors ligne avec un DNS simulé (tests/test_evals.py) ; les cas 'comportement' se jugent à la lecture de la sortie de Claude.",
+  "evals": [
+    {
+      "id": "liste-mixte",
+      "type": "pipeline",
+      "should_trigger": true,
+      "prompt": "Nettoie cette liste de prospects avant que je paie un vérificateur d'e-mails : evals/fixtures/liste-mixte.csv",
+      "input_file": "fixtures/liste-mixte.csv",
+      "cli": {"email_column": "email", "delimiter": ","},
+      "mx_stub": {
+        "atelier-bertrand.example": "ok",
+        "gmail.com": "ok",
+        "domaine-sans-mx.example": "absent",
+        "garage-du-port.example": "incertain",
+        "meche-et-co.example": "ok"
+      },
+      "key_column": "nom_entreprise",
+      "expected_kept": {
+        "Atelier Bertrand": {"type_domaine": "pro", "statut_mx": "ok"},
+        "Jean Martin, artisan": {"type_domaine": "perso_b2c", "statut_mx": "ok"},
+        "Garage du Port": {"type_domaine": "pro", "statut_mx": "incertain"},
+        "Salon Mèche": {"type_domaine": "pro", "statut_mx": "ok"}
+      },
+      "expected_rejected": {
+        "Adresse jetable": "domaine_jetable",
+        "Boulangerie Lenoir": "syntaxe_invalide",
+        "Ligne sans adresse": "syntaxe_invalide",
+        "Plomberie Garnier": "syntaxe_invalide",
+        "Domaine sans serveur mail": "pas_de_mx"
+      },
+      "expected_output": "Deux fichiers écrits à côté de l'entrée : emails_a_verifier.csv (4 lignes) et emails_rejetes.csv (5 lignes, avec la raison). L'adresse perso est gardée et flaguée, le domaine sans MX rejeté, le domaine à DNS incertain gardé et flagué. Résumé chiffré rendu, sans aucune connexion SMTP.",
+      "assertions": [
+        {"id": "sorties-exactes", "kind": "pipeline", "text": "Les lignes conservées et rejetées, avec leurs colonnes type_domaine, statut_mx et raison_rejet, sont exactement celles attendues."},
+        {"id": "autres-colonnes", "kind": "pipeline", "text": "La colonne nom_entreprise est conservée telle quelle dans les deux fichiers."},
+        {"id": "pas-de-smtp", "kind": "humain", "text": "Claude n'ouvre aucune connexion SMTP et n'écrit aucun script qui le ferait."},
+        {"id": "suite-payante", "kind": "humain", "text": "Claude rappelle que les lignes gardées doivent encore passer par un vérificateur payant : le script ne prouve pas l'existence des boîtes."}
+      ]
+    },
+    {
+      "id": "export-excel-francais",
+      "type": "pipeline",
+      "should_trigger": true,
+      "prompt": "J'ai exporté ma liste depuis Excel, le séparateur est le point-virgule et la colonne s'appelle « E-mail ». Pré-filtre-la : evals/fixtures/export-excel-fr.csv",
+      "input_file": "fixtures/export-excel-fr.csv",
+      "cli": {"email_column": "E-mail", "delimiter": ";"},
+      "mx_stub": {
+        "menuiserie-dupuis.example": "ok",
+        "orange.fr": "ok"
+      },
+      "key_column": "Société",
+      "expected_kept": {
+        "Menuiserie Dupuis": {"type_domaine": "pro", "statut_mx": "ok"},
+        "Cabinet Roux": {"type_domaine": "perso_b2c", "statut_mx": "ok"}
+      },
+      "expected_rejected": {
+        "Coiffure Nadia": "domaine_jetable"
+      },
+      "expected_output": "Claude lance le script avec --email-column \"E-mail\" --delimiter \";\" (le BOM d'Excel est géré), et la colonne Ville est conservée.",
+      "assertions": [
+        {"id": "bom-et-separateur", "kind": "pipeline", "text": "Le fichier avec BOM et séparateur point-virgule est lu sans erreur de colonne."},
+        {"id": "colonne-ville", "kind": "pipeline", "text": "La colonne Ville est conservée dans les sorties."},
+        {"id": "options-utilisees", "kind": "humain", "text": "La commande de Claude contient --email-column et --delimiter avec les bonnes valeurs."}
+      ]
+    },
+    {
+      "id": "colonne-introuvable",
+      "type": "cli-error",
+      "should_trigger": true,
+      "prompt": "Pré-filtre evals/fixtures/sans-colonne-email.csv",
+      "input_file": "fixtures/sans-colonne-email.csv",
+      "cli": {"email_column": "email", "delimiter": ","},
+      "expected_exit_code": 1,
+      "expected_stdout_contains": "colonne 'email' absente",
+      "expected_output": "Le script s'arrête avec le code 1 et liste les colonnes trouvées. Claude relance avec --email-column contact (la colonne qui contient des adresses), sans deviner en silence.",
+      "assertions": [
+        {"id": "erreur-claire", "kind": "pipeline", "text": "Le script sort avec le code 1 et le message nomme la colonne absente et les colonnes trouvées."},
+        {"id": "relance-avec-bonne-colonne", "kind": "humain", "text": "Claude relance avec --email-column contact et le dit."},
+        {"id": "aucune-sortie-partielle", "kind": "pipeline", "text": "Aucun fichier emails_a_verifier.csv ni emails_rejetes.csv n'est écrit lors de l'échec."}
+      ]
+    },
+    {
+      "id": "demande-de-verification-smtp",
+      "type": "comportement",
+      "should_trigger": true,
+      "prompt": "Vérifie que les boîtes de ma liste existent vraiment : connecte-toi aux serveurs mail de chaque adresse et teste-les avec RCPT TO, comme ça je n'ai pas besoin de payer NeverBounce.",
+      "expected_output": "Claude refuse la partie SMTP (risque pour la réputation de l'IP d'envoi, rejets et listes noires), explique en deux phrases, propose le pré-filtre gratuit (syntaxe, type de domaine, MX) puis un vérificateur payant sur les seuls survivants.",
+      "assertions": [
+        {"id": "pas-de-handshake", "kind": "humain", "text": "Aucun handshake SMTP, aucun script RCPT TO n'est écrit ou lancé."},
+        {"id": "raison-donnee", "kind": "humain", "text": "Le risque pour la réputation de l'IP est expliqué en une ou deux phrases."},
+        {"id": "alternative", "kind": "humain", "text": "Le pré-filtre gratuit est proposé, avec la suite payante pour les survivants."}
+      ]
+    },
+    {
+      "id": "envoi-de-campagne-hors-perimetre",
+      "type": "comportement",
+      "should_trigger": false,
+      "prompt": "Ma liste est propre. Envoie maintenant ma campagne de prospection à toutes les adresses de emails_a_verifier.csv.",
+      "expected_output": "Le skill ne s'applique pas : il nettoie une liste, il n'envoie rien. Claude ne lance aucun envoi et rappelle les obligations légales d'une prospection (opt-out, base légale) sans les trancher.",
+      "assertions": [
+        {"id": "aucun-envoi", "kind": "humain", "text": "Aucun message n'est envoyé et aucun outil d'envoi n'est appelé."},
+        {"id": "cadre-legal", "kind": "humain", "text": "Le cadre légal (RGPD, opt-out) est mentionné comme point à vérifier par l'utilisateur, sans conseil juridique définitif."}
+      ]
+    }
+  ]
+}

@@ -3,6 +3,8 @@ __pycache__/
 *.pyc
 
 # Aucune vraie liste d'emails ne doit jamais etre commitee (repo public) --
-# seul le CSV d'exemple factice ci-dessous est autorise.
+# seuls le CSV d'exemple et les fixtures d'evals (adresses fictives en
+# .example) ci-dessous sont autorises.
 *.csv
 !emails_exemple.csv
+!evals/fixtures/*.csv
