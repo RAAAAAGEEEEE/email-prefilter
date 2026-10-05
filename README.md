@@ -2,6 +2,22 @@
 
 Pré-filtre gratuit d'une liste d'emails (CSV) avant de payer un vérificateur tiers (NeverBounce, ZeroBounce, Reoon...), pour une campagne de prospection email BtoB. Skill Claude Code, utilisable aussi comme simple script Python.
 
+## Comment ça marche
+
+Pour un débutant, trois gestes, et aucun copier-coller du dépôt dans la conversation :
+
+1. **Installer le skill une fois** : `git clone https://github.com/RAAAAAGEEEEE/email-prefilter ~/.claude/skills/email-prefilter`
+   (disponible dans tous vos projets), ou le même clone dans `.claude/skills/email-prefilter` à la racine d'un
+   projet (disponible dans ce projet seulement). Sous Windows PowerShell, remplacez `~` par
+   `$env:USERPROFILE`. Détail : [docs/INSTALLATION.md](docs/INSTALLATION.md).
+2. **Le demander** : dans une session Claude Code, écrivez simplement « nettoie cette liste de prospects avant que je paie un vérificateur » en indiquant votre CSV, ou tapez `/email-prefilter`.
+3. **Se laisser guider** : Claude charge le skill d'après sa description, lance le script sur votre fichier et vous rend la liste triée (syntaxe, domaine, MX), sans aucun envoi SMTP.
+
+C'est le fonctionnement de tous les skills Claude Code : un dossier avec un `SKILL.md` placé dans
+`~/.claude/skills/<nom>/` (personnel) ou `.claude/skills/<nom>/` (projet) ; Claude le charge
+automatiquement quand votre demande correspond à sa `description`, et `/<nom>` le lance à la main.
+[officiel : [skills](https://code.claude.com/docs/en/skills#where-skills-live), page consultée le 2026-10-05]
+
 ## Le problème
 
 Les vérificateurs d'email payants facturent à la vérification. Envoyer une liste brute (fautes de frappe, adresses jetables, domaines sans serveur mail) gaspille du budget sur des lignes qui échoueraient de toute façon.
